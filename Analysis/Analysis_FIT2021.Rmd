@@ -1,0 +1,174 @@
+---
+title: "Analysis FIT Experiment 2021"
+author: "Paulsen, Schillig, Schlott, Timm"
+date: "8/3/2021"
+output: html_document
+---
+
+<style>
+body {
+text-align: justify}
+</style>
+
+## Loading needed packages
+```{r setup, warning = FALSE, message = FALSE}
+library('tidyverse')
+library('bootstrap')
+library('lme4')
+
+library(sjPlot)
+library(sjmisc)
+library(sjlabelled)
+```
+
+## Loading & tidying experimental data
+After loading in the data obtained directly from the _magpie server, a couple of operations were performed to tidy the dataset. The column "condition" was transferred to two columns named "condition" containing the two factors conjunction and feature. The column "subcondition" includes the factor conjunction as well, but divides feature up into "color" and "shape" for a more detailed look further down in the analysis. This step is also useful to compare our results to the original paper's analysis and corresponding graphs. 
+```{r data, warning = FALSE, message = FALSE}
+# read in data sets that are seperate due to complications in the experimental setup. This will be resolved until the final hand-in.
+data = readr::read_csv('./data/fit2021_results_total.csv')
+data$precondition[data$condition=="color"]       <- "feature"
+data$precondition[data$condition=="shape"]       <- "feature"
+data$precondition[data$condition=="conjunction"] <- "conjunction"
+
+# select all needed columns
+data = subset(data, select=c(submission_id, trial_number, trial_type, precondition, condition, item, expected, number_of_items, correctness, RT, age, gender, education))
+# rename the falsely named column education to dominant hand
+names(data)[names(data) == 'education']       <- 'dominantHand'
+names(data)[names(data) == 'number_of_items'] <- 'displaySize'
+names(data)[names(data) == 'submission_id']   <- 'subject'
+names(data)[names(data) == 'condition']       <- 'subcondition'
+names(data)[names(data) == 'precondition']    <- 'condition'
+
+## CONDITION
+# pipe data to only include main trials and set the 2 ordered factors "feature" & "conjunction"
+data <- data %>%
+  filter(trial_type == "main") %>%
+  mutate(condition = factor(condition, ordered = F, levels = c('feature', 'conjunction'))) %>%
+## SUBCONDITION
+# set the 3 ordered factors "color", "shape" & "conjunction" in the column "subcondition"
+  mutate(subcondition = factor(subcondition, ordered = F, levels = c('conjunction', 'color', 'shape')))
+
+
+data
+```
+## Population Statistics
+We are extracting some general statistics about our participant population.
+```{r pop stats, warning = FALSE, message = FALSE}
+data %>%
+  mutate(gender = factor(gender, ordered = F, levels = c('male', 'female'))) %>%
+  group_by(gender) %>%
+  summarize(meanAge = mean(age)) %>%
+  ungroup()
+
+data %>%
+  mutate(gender = factor(gender, ordered = F, levels = c('male', 'female'))) %>%
+  group_by(subject) %>%
+  summarize(gender = unique(gender)) %>%
+  group_by(gender) %>%
+  summarize(numGen = n()) %>%
+  ungroup()
+```
+
+
+
+## Confidence Intervals
+The tidy dataset is now used to calculate mean reaction times (RT) for each combination of expected (target,no target), displaySize(1, 5, 15, 30), and condition (conjunction, feature). This process was repeated analogously for the subcondition (conjunction, color, shape). In addition to the mean reaction times, 95% confidence intervals of the mean were calculated by bootstrapping 2000 samples of the mean in each condition-combination. 
+
+A quick aside: The bootstrap() throws an error when the input vector (RT in our case) contains duplicates. We have been able to reproduce this with with vectors from other projects and have sent in a bug report to the authors of the package. To solve this problem here, we have chosen to use the unique() function to strip our RT of said duplicates. While we are aware that this impacts the total number of RTs in the vector, the solution doesn't seem to impact the results in a problematic manner.
+
+```{r ci, echo=TRUE}
+# Compute the RT 95% confidence intervals for each subject using the bootstrap package
+ci_condition = data %>% group_by(expected, displaySize, condition) %>% 
+  summarize(meanRT = mean(RT),
+            minCI = mean(bootstrap(unique(RT), 2000, theta = function(x) {mean(x)}, func = function(x) {quantile(x,.025)})$jack.boot.val),
+            maxCI = mean(bootstrap(unique(RT), 2000, theta = function(x) {mean(x)}, func = function(x) {quantile(x,.975)})$jack.boot.val),
+            ) %>% 
+  ungroup() %>% 
+  mutate(expected = factor(expected))
+
+# Compute the RT 95% confidence intervals for each subject using the bootstrap package
+ci_subcondition = data %>% group_by(expected, displaySize, subcondition) %>% 
+  summarize(meanRT = mean(RT),
+            minCI = mean(bootstrap(unique(RT), 2000, theta = function(x) {mean(x)}, func = function(x) {quantile(x,.025)})$jack.boot.val),
+            maxCI = mean(bootstrap(unique(RT), 2000, theta = function(x) {mean(x)}, func = function(x) {quantile(x,.975)})$jack.boot.val)) %>% 
+  ungroup() %>% 
+  mutate(expected = factor(expected))
+
+ci_condition
+ci_subcondition
+```
+## Plotting Conditions (Feature, Conjunction)
+Moving on to the first visualization of the data we are here plotting the mean reaction times against displaySize whilst showing the confidence intervals as error-bars. Since reaction times are not normally distributed (leftward skew & left-limited to zero) we have chosen to transform it using the log function. This decision is backed by the paper To transform or not to transform: using generalized linear mixed models to analyse reaction time data by Lo S and Andrews S (2015). While this transformation is primarily useful in the general linear regression model following these plots, we have chosen to already plot the log(RT) in this step for ease of comparison and overall consistency.
+
+```{r plots_3cond, echo = TRUE}
+# Plot meanRTs with respect to displaySize
+ggplot(ci_condition, aes(y = log(meanRT), x = displaySize, color = expected)) + 
+  geom_errorbar(aes(ymin = log(minCI), ymax = log(maxCI)), width=1, alpha = 0.5) +
+  geom_point()  + geom_line() +
+  facet_grid(~ condition) +
+  scale_color_manual(values=c("8e8e93", "#007bff")) +
+  scale_x_continuous(breaks = c(1,5,15,30)) + 
+  ggtitle("Figure 1: MeanRT scores by stimuls displaySize in conditions feature & conjunction", 
+          subtitle = paste0("N=", nrow(unique(data["subject"])))) +
+  theme(legend.position = "bottom", 
+        axis.line = element_line(color = "#3a3a3c"),
+        legend.key.height = unit(1,"line"),
+        legend.title = element_text(size = 0, face = "bold"),
+        legend.text = element_text(size = 12),
+        legend.background = element_rect(fill = "transparent"),
+        axis.text = element_text(size = 9, color = "#3a3a3c"),
+        axis.title = element_text(size = 10, face = "bold", color = "#3a3a3c"),
+        plot.title = element_text(size = 10, face = "bold"))
+```
+
+*Figure 1* shows the log mean reaction times (log(meanRT) and their 95% confidence intervals (errorbars) with respect to the present displaySize of the stimulus (1, 5, 15 or 30 letters on screen) in both feature and conjunction condition. It is visible that within both conditions the reaction times including the target (blue) were consistently lower than the ones without the target (grey). Both conditions show a linear increase of reaction time without a target present with a steeper increase in the conjunction condition compared to the feature condition. In the feature condition the increase seems to be almost completely extinguished when a target is present (feature, blue line), while it is still present in the conjunction condition (conjunction, blue line).
+
+## Plotting Subcondtions (Color, Shape, Conjuction)
+With the second visualization we are trying to achieve a very similar plot to Figure 1 in the original Treisman & Gelade Paper we are attempting to replicate here. The original figure also plots reaction time against display size, while keeping both conditions and their subconditions in one plot. While the 1980 figure only distinctly plots the subcategories color & shape when a target is present (blue dashed and dotted lines), ggplot is forcing us to make the distinction throughout both target-conditions. Since this figure is meant to be directly comparable no logarithmic transformation of the RTs was performed. 
+```{r plot_2cond, echo = TRUE}
+
+# Plot meanRTs with respect to displaySize
+ggplot(ci_subcondition, aes(y = meanRT, x = displaySize, color = expected, linetype = subcondition)) +
+  geom_errorbar(aes(ymin = minCI, ymax = maxCI), width=1, alpha = 0.5) +
+  geom_point()  + geom_line() +
+  scale_color_manual(values=c("8e8e93", "#007bff")) +
+  scale_linetype_manual(values=c("solid", "dotted", "dashed")) +
+  scale_x_continuous(breaks = c(1,5,15,30)) + 
+  ggtitle("Figure 2: MeanRT scores by stimuls displaySize in conditions conjunction, color & shape", 
+          subtitle = paste0("N=", nrow(unique(data["subject"])))) +
+  theme(legend.position = "bottom", 
+        axis.line = element_line(color = "#3a3a3c"),
+        legend.key.height = unit(1,"line"),
+        legend.title = element_text(size = 0, face = "bold"),
+        legend.text = element_text(size = 12),
+        legend.background = element_rect(fill = "transparent"),
+        axis.text = element_text(size = 9, color = "#3a3a3c"),
+        axis.title = element_text(size = 10, face = "bold", color = "#3a3a3c"),
+        plot.title = element_text(size = 10, face = "bold"))
+```
+
+*Figure 2* shows the mean reaction times (RT) with respect to the present display size of the stimuli (1, 5, 15 or 30 letters on screen) in both conditions conjunction (solid line) and feature, being subdivided into its sub conditions color & shape (dotted and dashed line respectively). It is visible that within all conditions the reaction times including the target (blue) were lower than the ones without the target (grey). The curve with the steepest increase of reaction time with respect to increasing display size is the one representing the no target conjunction condition, followed by the very closely aligned no target, color and shape conditions as the second and third steepest increase of the same kind. The next line further down (blue, solid) represents the conjunction condition with a target present showing a linear increase in mean reaction time with increasing display size. The next two lines (blue, dashed and dotted) represent the target containing conditions for color and shape subcategories in the feature condition. Both lines, while being on different RT levels appear very parallel to the x-axis with a significant absence of increase compared to the other curves. All of these properties are so far congruent with the findings and the plot of the 1980 Treisman and Gelade paper. The main differences are that our reaction times for display size of 1 are not as densely grouped as theirs, while also being higher (all above 800ms here while all below 800ms Gelade & Treisman). In contrast our reaction time maximum lies around 2100ms while theirs is at 2400ms. Next, the color and shape graphs for the target condition (blue, dotted and dashed) are further apart in our graph than in the graph of the original research. The same observation can be made with the target containing conjunction condition (blue, solid) and the two non-target color and shape lines (grey, dotted and dashed) which lie closer together in the original paper, with the target condition even superseding the non-target condition. 
+
+We attribute these differences to altercations in experimental design and execution as well as to measurement technology discrepancies. Generally the differences can be viewed as minor, since the relevant properties like presence and absence of increase of reaction time in our data are fully congruent with the findings from 1980.
+ 
+## Statistical significance test
+We have chosen to run a simple significance test using a general linear model testing the hypothesis that the reaction times are linearly dependent on the condition and displaySize as well as their interaction. Feature Integration Theory states, that displaySize should have a  bigger influence on RTs in the conjunction condition than in the feature (color, shape) condition. For this we perform a linear regression on the data filtered to the conditions where a target is present.
+
+```{r stats_3cond, echo = TRUE}
+model_conditions = glm(log(RT) ~ condition + displaySize + displaySize:condition, data = filter(data, expected == "target" ))
+tab_model(model_conditions)
+```
+$$ Model:\\ 
+log(RT) = + 6.81 - 0.14 * condition[conjunction] + 0.00 * displaySize  + 0.02 * condition[conjunction] * displaySize$$
+The outcome of this general linear model is to be read as follows: With the feature condition as our baseline condition the intercept is at 6.81 log(RT) with an influence of 0.00 by increasing the displaySize. Both of these observations are statistically significant based on their p-values below 0.001. In the conjunction condition (mathematically set to 0 in the feature condtion, set to 1 in the conjunction condition) the intercept is attenueted by -0.14 and the displaySize now has an effect of increasing log(RT) by 0.02 for every single step increase in displaySize. Both of these observations are statistically significant based on their p-values below 0.001.
+
+With respect to our hypotheses this evaluation gives us the statistical basis for rejecting H0F and H0C. H0F states that the feature conditions coefficient for displaySize is non-zero, which our GLM calculates as zero with statistical significance (p<0.001). This leads us to reject this null-hypothesis and embrace our alternative hypothesis that reaction times are not significantly influenced by displaySize in the feature condition. 
+H0C states that the conjunction condition and displaySize interaction term has a coefficient that is zero, which our GLM calculates as 0.02 with statistical significance (p<0.001). This leads us to reject this null-hypothesis and embrace our alternative hypothesis that reaction times are significantly influenced by displaySize in the conjunction condition. 
+
+# Sources
+2021 Lüdecke, Daniel - Summary of Regression Models as HTML Table 
+https://cran.r-project.org/web/packages/sjPlot/vignettes/tab_model_estimates.html
+
+Lo S and Andrews S (2015) To transform or not to transform: using generalized linear mixed models to analyse reaction time data. Front. Psychol. 6:1171. doi: 10.3389/fpsyg.2015.01171
+
+
